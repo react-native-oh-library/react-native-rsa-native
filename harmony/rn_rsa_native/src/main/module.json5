@@ -1,0 +1,7 @@
+{
+  module: {
+    name: 'rn_rsa_native',
+    type: 'har',
+    deviceTypes: ['default'],
+  },
+}

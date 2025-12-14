@@ -1,0 +1,8 @@
+{
+  "license": "MIT",
+  "name": "@react-native-ohos/react-native-rsa-native",
+  "description": "RSA encryption for React Native HarmonyOS",
+  "main": "ts.ets",
+  "version": "2.0.5",
+  "type": "module",
+}
