@@ -1,0 +1,11 @@
+[
+    {
+        "Name": "react-native-rsa-native",
+        "License": "MIT License",
+        "License File": "https://github.com/amitaymolko/react-native-rsa-native/blob/master/LICENSE",
+        "Version Number": "2.0.5",
+        "Owner" : "xiafeng@huawei.com",
+        "Upstream URL": "https://github.com/amitaymolko/react-native-rsa-native",
+        "Description": "A native implementation of RSA key generation and encryption/decryption."
+    }
+]
