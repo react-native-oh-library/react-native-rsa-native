@@ -3,6 +3,6 @@
   "name": "@react-native-ohos/react-native-rsa-native",
   "description": "RSA encryption for React Native HarmonyOS",
   "main": "ts.ets",
-  "version": "2.0.5",
+  "version": "2.0.6-rc.1",
   "type": "module",
 }

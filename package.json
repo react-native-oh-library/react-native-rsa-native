@@ -1,15 +1,32 @@
 {
-  "name": "react-native-rsa-native",
-  "version": "2.0.5",
+  "name": "@react-native-ohos/react-native-rsa-native",
+  "version": "2.0.6-rc.1",
   "description": "A native implementation of RSA key generation and encryption/decryption.",
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "codegen-lib": "react-native codegen-lib-harmony --no-safety-check --npm-package-name react-native-rsa-native --cpp-output-path ./harmony/cpp/generated --ets-output-path ./harmony/ets/generated --turbo-modules-spec-paths ./NativeRNRSA.ts ./NativeRNRSAKeychain.ts"
   },
   "keywords": [
     "react-native",
-    "rsa"
+    "rsa",
+    "harmony",
+    "crypto"
+  ],
+  "harmony": {
+    "alias": "react-native-rsa-native"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "NativeRNRSA.ts",
+    "NativeRNRSAKeychain.ts",
+    "harmony/rn_rsa_native.har",
+    "harmony/rn_rsa_native",
+    "!harmony/oh_modules",
+    "!harmony/**/build",
+    "!harmony/**/oh_modules"
   ],
   "repository": {
     "type": "git",
@@ -22,5 +39,12 @@
     "name": "Amitay Molko"
   },
   "license": "MIT",
-  "homepage": "https://github.com/amitaymolko/react-native-rsa-native#readme"
+  "homepage": "https://github.com/amitaymolko/react-native-rsa-native#readme",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "dependencies": {
+    "react-native-rsa-native": "2.0.5"
+  }
 }
