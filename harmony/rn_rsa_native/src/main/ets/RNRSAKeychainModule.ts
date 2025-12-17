@@ -29,29 +29,40 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
     return await this.generateHuksSeparateKeys(keyTag, 256, 'EC');
   }
 
-  private async generateHuksSeparateKeys(keyTag: string, keySize: number,
-    keyType: string): Promise<{ public: string }> {
-    const encryptKeyTag = `${keyTag}_encrypt`;
-    const signKeyTag: string = `${keyTag}_sign`;
-    const purposesValue =
-      huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_ENCRYPT |
+  private async generateHuksSeparateKeys(
+    keyTag: string,
+    keySize: number,
+    keyType: string
+  ): Promise<{ public: string }> {
+    const signKeyTag = `${keyTag}_sign`;
+    if (keyType === 'EC') {
+      await this.generateHUKSKey(signKeyTag, keySize,
+        huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_SIGN |
+        huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_VERIFY,
+        'EC'
+      );
+      const publicKey = await this.getRawECPublicKey(keyTag);
+      return { public: publicKey };
+    }
+    else {
+      const encryptKeyTag = `${keyTag}_encrypt`;
+      const encryptPurposes = huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_ENCRYPT |
       huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_DECRYPT;
-
-    const signPurpose =
-      huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_SIGN |
+      const signPurposes = huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_SIGN |
       huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_VERIFY;
 
-    const isECKey = keyType === 'EC';
-
-    if (isECKey) {
-      await this.generateHUKSKey(signKeyTag, keySize, signPurpose, 'EC');
-      const publicKey = await this.getRawECPublicKey(signKeyTag);
-      return { public: publicKey };
-    } else {
-      await this.generateHUKSKey(encryptKeyTag, keySize, purposesValue, 'RSA');
-      await this.generateHUKSKey(signKeyTag, keySize, signPurpose, 'RSA');
+      await this.generateHUKSKey(encryptKeyTag, keySize, encryptPurposes, 'RSA');
+      await this.generateHUKSKey(signKeyTag, keySize, signPurposes, 'RSA');
       const publicKey = await this.encodedPublicKeyDER(keyTag);
       return { public: publicKey };
+    }
+  }
+
+  private getKeyTagForOperation(baseKeyTag: string, operation: 'encrypt' | 'decrypt' | 'sign' | 'verify'): string {
+    if (operation === 'encrypt' || operation === 'decrypt') {
+      return `${baseKeyTag}_encrypt`;
+    } else {
+      return `${baseKeyTag}_sign`;
     }
   }
 
@@ -69,7 +80,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
 
     const hukKeySize = rsaKeySizeMap[keySize];
     if (!hukKeySize) {
-      throw new Error(`unsupport: ${keySize}`);
+      throw new Error(`unsupported: ${keySize}`);
     }
     const algorithm = algorithmType === 'EC' ? huks.HuksKeyAlg.HUKS_ALG_ECC : huks.HuksKeyAlg.HUKS_ALG_RSA;
     const properties: Array<huks.HuksParam> = [
@@ -112,12 +123,10 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
   }
 
   async encrypt(data: string, keyTag: string): Promise<string> {
-    Logger.info(TAG, `encrypt called with data length: ${data.length}, keyTag: ${keyTag}`);
-
     try {
       const dataArray = RSACommonUtils.encodeToUtf8Bytes(data);
-      const encryptKeyTag = `${keyTag}_encrypt`;
-      const encryptedBytes = await this.performHuksEncrypt(encryptKeyTag, dataArray);
+      const actualKeyTag = this.getKeyTagForOperation(keyTag, 'encrypt');
+      const encryptedBytes = await this.performHuksEncrypt(actualKeyTag, dataArray);
       return RSACommonUtils.uint8ArrayToBase64WithLineBreaks(encryptedBytes);
     } catch (error) {
       Logger.error(TAG, `Encryption failed: ${error}`);
@@ -161,7 +170,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
             const encryptedBytes = RSACommonUtils.convertOutDataToUint8Array(outData);
             resolve(encryptedBytes);
           } catch (error) {
-            reject(new Error(`faild: ${error}`));
+            reject(new Error(`failed: ${error}`));
           }
         });
       });
@@ -180,12 +189,10 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
   }
 
   async decrypt(data: string, keyTag: string): Promise<string> {
-    Logger.info(TAG, `decrypt called with data length: ${data.length}, keyTag: ${keyTag}`);
-
     try {
       const encryptedBytes = RSACommonUtils.base64StringToUint8ArrayWithLineBreaks(data);
-      const encryptKeyTag = `${keyTag}_encrypt`;
-      const decryptedBytes = await this.performHuksDecrypt(encryptKeyTag, encryptedBytes);
+      const actualKeyTag = this.getKeyTagForOperation(keyTag, 'decrypt');
+      const decryptedBytes = await this.performHuksDecrypt(actualKeyTag, encryptedBytes);
       return RSACommonUtils.decodeFromUtf8Bytes(decryptedBytes);
     } catch (error) {
       Logger.error(TAG, `Decryption failed: ${error}`);
@@ -252,10 +259,10 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
 
   async signWithAlgorithm(data: string, keyTag: string, algorithm?: string): Promise<string> {
     const actualAlgorithm = algorithm || 'SHA512withRSA';
-    const signKeyTag = `${keyTag}_sign`;
+    const actualKeyTag = this.getKeyTagForOperation(keyTag, 'sign');
     try {
       const dataBytes = RSACommonUtils.encodeToUtf8Bytes(data);
-      const signatureBytes = await this.performHuksSignWithAlgorithm(signKeyTag, dataBytes, actualAlgorithm);
+      const signatureBytes = await this.performHuksSignWithAlgorithm(actualKeyTag, dataBytes, actualAlgorithm);
       return RSACommonUtils.uint8ArrayToBase64(signatureBytes);
     } catch (error) {
       Logger.error(TAG, `Sign with algorithm failed: ${error}`);
@@ -320,19 +327,19 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
   }
 
   async verify(signature: string, message: string, keyTag: string): Promise<boolean> {
-    const signKeyTag = `${keyTag}_sign`;
-    const keyType = await this.detectKeyType(keyTag);
+    const actualKeyTag = this.getKeyTagForOperation(keyTag, 'verify');
+    const keyType = await this.detectKeyType(actualKeyTag);
     if (keyType === 'EC') {
-      return await this.verifySignature(message, signature, signKeyTag, 'SHA256withECDSA');
+      return await this.verifySignature(message, signature, keyTag, 'SHA256withECDSA');
     } else {
-      return await this.verifySignature(message, signature, signKeyTag, 'SHA512withRSA');
+      return await this.verifySignature(message, signature, actualKeyTag, 'SHA512withRSA');
     }
   }
 
   async verifyWithAlgorithm(signature: string, message: string, keyTag: string, algorithm?: string): Promise<boolean> {
     const actualAlgorithm = algorithm || 'SHA512withRSA';
-    const signKeyTag = `${keyTag}_sign`;
-    return await this.verifySignature(message, signature, signKeyTag, actualAlgorithm);
+    const actualKeyTag = this.getKeyTagForOperation(keyTag, 'verify');
+    return await this.verifySignature(message, signature, actualKeyTag, actualAlgorithm);
   }
 
   private async verifySignature(data: string, signatureBase64: string, keyTag: string,
@@ -467,12 +474,10 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
   }
 
   async encrypt64(data: string, key: string): Promise<string> {
-    Logger.info(TAG, `encrypt64 called with data length: ${data.length}, keyTag: ${key}`);
-
     try {
       const dataBytes = RSACommonUtils.base64StringToUint8Array(data);
-      const encryptKeyTag = `${key}_encrypt`;
-      const encryptedBytes = await this.performHuksEncrypt(encryptKeyTag, dataBytes);
+      const actualKeyTag = this.getKeyTagForOperation(key, 'encrypt');
+      const encryptedBytes = await this.performHuksEncrypt(actualKeyTag, dataBytes);
       return RSACommonUtils.uint8ArrayToBase64(encryptedBytes);
     } catch (error) {
       Logger.error(TAG, `encrypt64 failed: ${error}`);
@@ -481,12 +486,10 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
   }
 
   async decrypt64(data: string, key: string): Promise<string> {
-    Logger.info(TAG, `decrypt64 called with data length: ${data.length}, keyTag: ${key}`);
-
     try {
       const decryptBytes = RSACommonUtils.base64StringToUint8Array(data);
-      const encryptKeyTag = `${key}_encrypt`;
-      const decryptedBytes = await this.performHuksDecrypt(encryptKeyTag, decryptBytes);
+      const actualKeyTag = this.getKeyTagForOperation(key, 'encrypt');
+      const decryptedBytes = await this.performHuksDecrypt(actualKeyTag, decryptBytes);
       return RSACommonUtils.uint8ArrayToBase64(decryptedBytes);
     } catch (error) {
       Logger.error(TAG, `decrypt64 failed: ${error}`);
@@ -497,13 +500,13 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
   async sign64(data: string, key: string): Promise<string> {
     try {
       const dataBytes = RSACommonUtils.base64StringToUint8Array(data);
-      const signKeyTag = `${key}_sign`;
+      const actualKeyTag = this.getKeyTagForOperation(key, 'sign');
       const keyType = await this.detectKeyType(key);
       let signatureBytes: Uint8Array;
       if (keyType === 'EC') {
-        signatureBytes = await this.performHuksSignWithAlgorithm(signKeyTag, dataBytes, 'SHA256withECDSA');
+        signatureBytes = await this.performHuksSignWithAlgorithm(actualKeyTag, dataBytes, 'SHA256withECDSA');
       } else {
-        signatureBytes = await this.performHuksSignWithAlgorithm(signKeyTag, dataBytes, 'SHA512withRSA');
+        signatureBytes = await this.performHuksSignWithAlgorithm(actualKeyTag, dataBytes, 'SHA512withRSA');
       }
       return RSACommonUtils.uint8ArrayToBase64(signatureBytes);
     } catch (error) {
@@ -516,8 +519,8 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
     const actualAlgorithm = algorithm || 'SHA512withRSA';
     try {
       const dataBytes = RSACommonUtils.base64StringToUint8Array(data);
-      const signKeyTag = `${key}_sign`;
-      const signatureBytes = await this.performHuksSignWithAlgorithm(signKeyTag, dataBytes, actualAlgorithm);
+      const actualKeyTag = this.getKeyTagForOperation(key, 'sign');
+      const signatureBytes = await this.performHuksSignWithAlgorithm(actualKeyTag, dataBytes, actualAlgorithm);
       return RSACommonUtils.uint8ArrayToBase64(signatureBytes);
     } catch (error) {
       Logger.error(TAG, `sign64WithAlgorithm failed: ${error}`);
@@ -529,13 +532,13 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
     try {
       const dataBytes = RSACommonUtils.base64StringToUint8Array(data);
       const signatureBytes = RSACommonUtils.base64StringToUint8Array(secretToVerify);
-      const signKeyTag = `${key}_sign`;
+      const actualKeyTag = this.getKeyTagForOperation(key, 'verify');
       const keyType = await this.detectKeyType(key);
       let isValid: boolean = false;
       if (keyType === 'EC') {
-        isValid = await this.performHuksVerify(signKeyTag, dataBytes, signatureBytes, 'SHA256withECDSA');
+        isValid = await this.performHuksVerify(actualKeyTag, dataBytes, signatureBytes, 'SHA256withECDSA');
       } else {
-        isValid = await this.performHuksVerify(signKeyTag, dataBytes, signatureBytes, 'SHA512withRSA');
+        isValid = await this.performHuksVerify(actualKeyTag, dataBytes, signatureBytes, 'SHA512withRSA');
       }
       return isValid;
     } catch (error) {
@@ -549,10 +552,8 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
     try {
       const dataBytes = RSACommonUtils.base64StringToUint8Array(message);
       const signatureBytes = RSACommonUtils.base64StringToUint8Array(signature);
-      const signKeyTag = `${key}_sign`;
-      console.log('ah ----------q')
-      const isValid = await this.performHuksVerify(signKeyTag, dataBytes, signatureBytes, actualAlgorithm);
-      console.log('ah ----------',isValid)
+      const actualKeyTag = this.getKeyTagForOperation(key, 'verify');
+      const isValid = await this.performHuksVerify(actualKeyTag, dataBytes, signatureBytes, actualAlgorithm);
       return isValid;
     } catch (error) {
       Logger.error(TAG, `verify64WithAlgorithm failed: ${error}`);
@@ -562,8 +563,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
 
   async encodedPublicKeyDER(keyTag: string): Promise<string> {
     try {
-      const signKeyTag = `${keyTag}_sign`;
-      const signDerBase64 = await this.exportHuksPublicKeyDER(signKeyTag);
+      const signDerBase64 = await this.exportHuksPublicKeyDER(keyTag);
       if (signDerBase64) {
         return signDerBase64;
       } else {
@@ -579,27 +579,20 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
     try {
       const rawDerBase64 = await this.getRawHuksPublicKey(keyTag);
       if (!rawDerBase64) {
+        Logger.error(`getRawHuksPublicKey returned null for ${keyTag}`);
         return null;
       }
-      const rawBytes = RSACommonUtils.base64StringToUint8Array(rawDerBase64);
-      let x509Bytes: Uint8Array;
-
-      if (this.isX509Format(rawBytes)) {
-        x509Bytes = rawBytes;
-      } else {
-        x509Bytes = this.convertToX509Format(rawBytes);
-      }
-      const x509Base64 = RSACommonUtils.uint8ArrayToBase64(x509Bytes);
-      const x509Pem = RSACommonUtils.derToPem(x509Base64, 'PUBLIC KEY');
-      return x509Pem;
+      const result = RSACommonUtils.derToPem(rawDerBase64, 'PUBLIC KEY');
+      return result;
     } catch (error) {
-      Logger.error(TAG, `exportHuksPublicKeyX509 failed: ${error}`);
+      Logger.error(TAG, `exportHuksPublicKeyDER failed: ${error}`);
       return null;
     }
   }
 
   private async getRawHuksPublicKey(keyTag: string): Promise<string | null> {
     return new Promise<string | null>((resolve) => {
+      keyTag = `${keyTag}_sign`
       const emptyOptions: huks.HuksOptions = { properties: [] };
       huks.exportKeyItem(keyTag, emptyOptions, (err: any, result: any) => {
         if (err) {
@@ -633,42 +626,11 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
     });
   }
 
-  private isX509Format(bytes: Uint8Array): boolean {
-    const rsaOidHex = '06092a864886f70d010101';
-    const hex = Array.from(bytes)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-    return hex.includes(rsaOidHex);
-  }
-
-  private convertToX509Format(pkcs1Der: Uint8Array): Uint8Array {
-    const rsaOid = new Uint8Array([
-      0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01, 0x05, 0x00
-    ]);
-
-    const bitString = new Uint8Array(pkcs1Der.length + 3);
-    bitString[0] = 0x03;
-    bitString[1] = pkcs1Der.length + 1;
-    bitString[2] = 0x00;
-    bitString.set(pkcs1Der, 3);
-
-    const totalLength = rsaOid.length + bitString.length;
-    const x509Der = new Uint8Array(totalLength + 2);
-
-    x509Der[0] = 0x30;
-    x509Der[1] = totalLength;
-    x509Der.set(rsaOid, 2);
-    x509Der.set(bitString, 2 + rsaOid.length);
-
-    return x509Der;
-  }
-
   private async detectKeyType(keyTag: string): Promise<'RSA' | 'EC'> {
     try {
-      const signKeyTag = `${keyTag}_sign`;
       const options: huks.HuksOptions = { properties: [] };
       return new Promise((resolve, reject) => {
-        huks.getKeyItemProperties(signKeyTag, options, (err, result) => {
+        huks.getKeyItemProperties(keyTag, options, (err, result) => {
           if (result && result.properties) {
             const algProperty = result.properties.find(
               (p: any) => p.tag === huks.HuksTag.HUKS_TAG_ALGORITHM
@@ -731,13 +693,20 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
 
   async encodedPublicKey(keyTag: string): Promise<string | null> {
     try {
-      const signKeyTag = `${keyTag}_sign`;
-      const publicKeyDer = await this.getRawHuksPublicKey(signKeyTag);
+      const publicKeyDer = await this.getRawHuksPublicKey(keyTag);
       if (!publicKeyDer) {
-        Logger.error(`failed`);
+        Logger.error(`failed to get raw public key for ${keyTag}`);
         return null;
       }
-      return RSACommonUtils.derToPem(publicKeyDer, 'PUBLIC KEY');
+      const rawBytes = RSACommonUtils.base64StringToUint8Array(publicKeyDer);
+      try {
+        const pkcs1Bytes = this.extractPKCS1FromX509(rawBytes);
+        const pkcs1Base64 = RSACommonUtils.uint8ArrayToBase64(pkcs1Bytes);
+        return RSACommonUtils.derToPem(pkcs1Base64, 'PUBLIC KEY');
+      } catch (conversionError) {
+        Logger.error(TAG, `extractPKCS1FromX509 failed: ${conversionError}`);
+        return RSACommonUtils.derToPem(publicKeyDer, 'PUBLIC KEY');
+      }
     } catch (error) {
       Logger.error(TAG, `encodedPublicKey failed: ${error}`);
       return null;
@@ -746,19 +715,55 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
 
   async encodedPublicKeyRSA(keyTag: string): Promise<string | null> {
     try {
-      const signKeyTag = `${keyTag}_sign`;
-
-      const publicKeyDer = await this.getRawHuksPublicKey(signKeyTag);
+      const publicKeyDer = await this.getRawHuksPublicKey(keyTag);
       if (!publicKeyDer) {
-        Logger.error('failed');
+        Logger.error('failed to get raw public key');
         return null;
       }
-      const publicKey = RSACommonUtils.derToPem(publicKeyDer, 'RSA PUBLIC KEY');
-      return publicKey;
+      const rawBytes = RSACommonUtils.base64StringToUint8Array(publicKeyDer);
+      try {
+        const pkcs1Bytes = this.extractPKCS1FromX509(rawBytes);
+        const pkcs1Base64 = RSACommonUtils.uint8ArrayToBase64(pkcs1Bytes);
+        return RSACommonUtils.derToPem(pkcs1Base64, 'RSA PUBLIC KEY');
+      } catch (conversionError) {
+        Logger.error(TAG, `extractPKCS1FromX509 failed for RSA: ${conversionError}`);
+        return RSACommonUtils.derToPem(publicKeyDer, 'RSA PUBLIC KEY');
+      }
     } catch (error) {
-      Logger.error(TAG, `encodedPublicKey failed: ${error}`);
+      Logger.error(TAG, `encodedPublicKeyRSA failed: ${error}`);
       return null;
     }
+  }
+
+  private extractPKCS1FromX509(x509Der: Uint8Array): Uint8Array {
+    let index = 0;
+    if (x509Der[index] !== 0x30) throw new Error('Not a valid X.509');
+    index++;
+
+    if (x509Der[index] === 0x82) {
+      index += 3;
+      index += 15;
+      if (x509Der[index] !== 0x03) {
+        throw new Error('Expected BIT STRING');
+      }
+      index++;
+      if (x509Der[index] === 0x82) {
+        const bsLenHigh = x509Der[index + 1];
+        const bsLenLow = x509Der[index + 2];
+        const bitStringLength = (bsLenHigh << 8) | bsLenLow;
+        index += 3;
+        if (x509Der[index] === 0x00) {
+          index++;
+        }
+        const pkcs1Length = bitStringLength - 1;
+        const pkcs1Bytes = new Uint8Array(pkcs1Length);
+        pkcs1Bytes.set(x509Der.slice(index, index + pkcs1Length));
+
+        return pkcs1Bytes;
+      }
+    }
+
+    throw new Error('Could not extract PKCS#1 from X.509');
   }
 
   async generateCSR(keyTag: string, CN: string, withAlgorithm?: string): Promise<{ csr: string }> {
@@ -845,7 +850,6 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
 
   private async storePublicKeyToHuks(keyTag: string, pubKeyBlob: cryptoFramework.DataBlob): Promise<void> {
     try {
-      const publicKeyTag = `${keyTag}_sign`;
       const properties: Array<huks.HuksParam> = [
         { tag: huks.HuksTag.HUKS_TAG_ALGORITHM, value: huks.HuksKeyAlg.HUKS_ALG_RSA },
         { tag: huks.HuksTag.HUKS_TAG_KEY_SIZE, value: huks.HuksKeySize.HUKS_RSA_KEY_SIZE_2048 },
@@ -863,13 +867,13 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
       };
       const checkOptions: huks.HuksOptions = { properties: [] };
       return new Promise<void>((resolve, reject) => {
-        huks.isKeyItemExist(publicKeyTag, checkOptions, (existError, existResult) => {
+        huks.isKeyItemExist(keyTag, checkOptions, (existError, existResult) => {
           if (existError) {
             Logger.info(`Error:`, JSON.stringify(existError));
           }
 
           if (existResult) {
-            huks.deleteKeyItem(publicKeyTag, checkOptions, (deleteError) => {
+            huks.deleteKeyItem(keyTag, checkOptions, (deleteError) => {
               if (deleteError) {
                 Logger.info(`Error:`, JSON.stringify(deleteError));
               }
@@ -880,7 +884,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
           }
         });
         const proceedWithImport = () => {
-          huks.importKeyItem(publicKeyTag, options, (importError) => {
+          huks.importKeyItem(keyTag, options, (importError) => {
             if (importError) {
               Logger.info(`Error:`, JSON.stringify(importError));
             } else {
@@ -891,7 +895,7 @@ export class RNRSAKeychainModule extends AnyThreadTurboModule {
         };
       });
     } catch (error) {
-	  Logger.error(`Error:`,error);
+      Logger.error(`Error:`,error);
     }
   }
 
